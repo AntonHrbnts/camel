@@ -15,11 +15,14 @@
  * limitations under the License.
  */
 package org.apache.camel.catalog.console;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import org.apache.camel.catalog.CamelCatalog;
 import org.apache.camel.catalog.DefaultCamelCatalog;
@@ -44,17 +47,31 @@ public class CatalogConsole extends AbstractDevConsole {
         StringBuilder sb = new StringBuilder();
 
         sb.append("\nComponents:\n");
-        getCamelContext().getComponentNames().forEach(n -> appendModel(catalog.componentModel(n), sb));
+        sb.append(toStringBuilder(modelStream(getCamelContext().getComponentNames(), catalog::componentModel)));
+
         sb.append("\n\nLanguages:\n");
-        getCamelContext().getLanguageNames().forEach(n -> appendModel(catalog.languageModel(n), sb));
+        sb.append(toStringBuilder(modelStream(getCamelContext().getLanguageNames(), catalog::languageModel)));
+
         sb.append("\n\nData Formats:\n");
-        getCamelContext().getDataFormatNames().forEach(n -> appendModel(catalog.dataFormatModel(n), sb));
+        sb.append(toStringBuilder(modelStream(getCamelContext().getDataFormatNames(), catalog::dataFormatModel)));
 
         // misc is harder to find as we need to find them via classpath
         sb.append("\n\nMiscellaneous Components:\n");
         evalMisc(sb, CatalogConsole::appendModel);
 
         return sb.toString();
+    }
+
+    @Override
+    protected JsonObject doCallJson(Map<String, Object> options) {
+        JsonObject root = new JsonObject();
+        root.put("components", toJsonObjectList(modelStream(getCamelContext().getComponentNames(), catalog::componentModel)));
+        root.put("dataformat", toJsonObjectList(modelStream(getCamelContext().getDataFormatNames(), catalog::dataFormatModel)));
+        root.put("languages", toJsonObjectList(modelStream(getCamelContext().getLanguageNames(), catalog::languageModel)));
+
+        // misc is harder to find as we need to find them via classpath
+        root.put("others", extractOthers());
+        return root;
     }
 
     private <T> void evalMisc(T consumable, BiConsumer<ArtifactModel<?>, T> consumer) {
@@ -71,30 +88,27 @@ public class CatalogConsole extends AbstractDevConsole {
         }
     }
 
-    @Override
-    protected JsonObject doCallJson(Map<String, Object> options) {
-        JsonObject root = new JsonObject();
-        List<JsonObject> components = new ArrayList<>();
-        root.put("components", components);
-        List<JsonObject> dataformat = new ArrayList<>();
-        root.put("dataformat", dataformat);
-        List<JsonObject> languages = new ArrayList<>();
-        root.put("languages", languages);
+    private List<JsonObject> extractOthers() {
         List<JsonObject> others = new ArrayList<>();
-        root.put("others", others);
-
-        getCamelContext().getComponentNames().forEach(n -> appendModel(catalog.componentModel(n), components));
-        getCamelContext().getLanguageNames().forEach(n -> appendModel(catalog.languageModel(n), languages));
-        getCamelContext().getDataFormatNames().forEach(n -> appendModel(catalog.dataFormatModel(n), dataformat));
-
-        // misc is harder to find as we need to find them via classpath
         evalMisc(others, CatalogConsole::appendModel);
+        return others;
+    }
 
-        return root;
+    private List<JsonObject> toJsonObjectList(Stream<ArtifactModel<?>> values) {
+        return values.map(CatalogConsole::modelToJsonObject).toList();
+    }
+
+    private StringBuilder toStringBuilder(Stream<ArtifactModel<?>> values) {
+        StringBuilder sb = new StringBuilder();
+        values.map(CatalogConsole::modelToString).forEach(sb::append);
+        return sb;
+    }
+
+    private Stream<ArtifactModel<?>> modelStream(Set<String> names, Function<String, ArtifactModel<?>> extractor){
+        return names.stream().map(extractor).filter(Objects::nonNull);
     }
 
     private ArtifactModel<?> findOtherModel(String artifactId) {
-        // is it a mist component
         for (String name : catalog.findOtherNames()) {
             OtherModel model = catalog.otherModel(name);
             if (model != null && model.getArtifactId().equals(artifactId)) {
@@ -105,32 +119,37 @@ public class CatalogConsole extends AbstractDevConsole {
     }
 
     private static void appendModel(ArtifactModel<?> model, StringBuilder sb) {
-        if (model != null) {
-            String level = model.getSupportLevel().toString();
-            if (model.isDeprecated()) {
-                level += "-deprecated";
-            }
-            sb.append(String.format("\n    %s %s %s %s: %s", model.getArtifactId(), level,
-                    model.getFirstVersionShort(), model.getTitle(), model.getDescription()));
+        sb.append(modelToString(model));
+    }
+
+    private static String modelToString(ArtifactModel<?> model) {
+        String level = model.getSupportLevel().toString();
+        if (model.isDeprecated()) {
+            level += "-deprecated";
         }
+        return String.format("\n    %s %s %s %s: %s", model.getArtifactId(), level,
+                model.getFirstVersionShort(), model.getTitle(), model.getDescription());
     }
 
     private static void appendModel(ArtifactModel<?> model, List<JsonObject> list) {
         if (model != null) {
-            JsonObject jo = new JsonObject();
-            String level = model.getSupportLevel().toString();
-            if (model.isDeprecated()) {
-                level += "-deprecated";
-            }
-            jo.put("groupId", model.getGroupId());
-            jo.put("artifactId", model.getArtifactId());
-            jo.put("version", model.getVersion());
-            jo.put("level", level);
-            jo.put("firstVersion", model.getFirstVersionShort());
-            jo.put("title", model.getTitle());
-            jo.put("description", model.getDescription());
-
-            list.add(jo);
+            list.add(modelToJsonObject(model));
         }
+    }
+
+    private static JsonObject modelToJsonObject(ArtifactModel<?> model) {
+        JsonObject jo = new JsonObject();
+        String level = model.getSupportLevel().toString();
+        if (model.isDeprecated()) {
+            level += "-deprecated";
+        }
+        jo.put("groupId", model.getGroupId());
+        jo.put("artifactId", model.getArtifactId());
+        jo.put("version", model.getVersion());
+        jo.put("level", level);
+        jo.put("firstVersion", model.getFirstVersionShort());
+        jo.put("title", model.getTitle());
+        jo.put("description", model.getDescription());
+        return jo;
     }
 }
